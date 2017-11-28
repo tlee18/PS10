@@ -1,6 +1,6 @@
 ---
 title: "STAT/MATH 495: Problem Set 10"
-author: "WRITE YOUR NAME(S) HERE"
+author: "Tim Lee"
 date: "2017-11-28"
 output:
   html_document:
@@ -20,7 +20,7 @@ knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4.5, message=FALSE, w
 
 # Collaboration
 
-Please indicate who you collaborated with on this assignment: 
+Please indicate who you collaborated with on this assignment: Pei Gong, Vickie Ip
 
 
 
@@ -30,6 +30,8 @@ Please indicate who you collaborated with on this assignment:
 library(tidyverse)
 library(broom)
 library(glmnet)
+
+
 
 train <- read_csv("data/train.csv")
 test <- read_csv("data/test.csv")
@@ -56,11 +58,102 @@ predictor_matrix_test <- model.matrix(model_formula, data = test)[, -1]
 
 # Do work and create submission files:
 
-```{r}
 
+# LASSO Crossvalidated
+```{r, echo = FALSE}
+get_LASSO_coefficients <- function(LASSO_fit){
+  coeff_values <- LASSO_fit %>% 
+    broom::tidy() %>% 
+    as_tibble() %>% 
+    select(-c(step, dev.ratio)) %>% 
+    tidyr::complete(lambda, nesting(term), fill = list(estimate = 0)) %>% 
+    arrange(desc(lambda)) %>% 
+    select(term, estimate, lambda)
+  return(coeff_values)
+}
+
+# Define values of tuning/complexity parameter lambda
+lambda_inputs <- 10^seq(-2, 0, length = 50)
+
+# Fit the model using glmnet
+LASSO_fit <- glmnet(x=predictor_matrix_train, y=train$log_price_doc, alpha = 1, lambda = lambda_inputs)
+
+# Get beta-hat coefficients for ALL values of knob/tuning parameter lambda
+LASSO_coefficients <- get_LASSO_coefficients(LASSO_fit)
+
+#ggplot(LASSO_coefficients, aes(x=lambda, y=estimate, col=term)) +
+#  geom_line() +
+#  labs(x="lambda", y="beta-hat coefficient estimate")
+
+
+plot_LASSO_coefficients <- LASSO_coefficients %>% 
+  filter(term != "(Intercept)") %>% 
+  ggplot(aes(x=lambda, y=estimate, col=term)) +
+  geom_line() +
+  scale_x_log10() +
+  labs(x="lambda (log10-scale)", y="beta-hat coefficient estimate",
+       title="LASSO regularized coefficient for each lambda value")
+#plot_LASSO_coefficients
+
+LASSO_CV <- cv.glmnet(x=predictor_matrix_train, y=train$log_price_doc, alpha=1, lambda=lambda_inputs)
+
+# Optimal lambdas
+lambda_star <- LASSO_CV$lambda.min
+lambda_star_1SE <- LASSO_CV$lambda.1se
+
+
+plot(LASSO_CV)
+abline(v=log(lambda_star), col="red")
+abline(v=log(lambda_star_1SE), col="blue")
+
+
+plot_LASSO_coefficients <- plot_LASSO_coefficients +
+  geom_vline(xintercept = lambda_star, col="red", alpha=0.4, linetype="dashed") +
+  geom_vline(xintercept = lambda_star_1SE, col="blue", alpha=0.4, linetype="dashed")
+```
+
+* For model simplicity, I will use the optimal lambda-star within one standard error of the minimal MSE for my predictions. The number of variables used goes from 11 at the optimal lambda-star to just 5 variables when looking at the optimal lambda-star corresponding to the simplest model within 1 SE of the MSE. 
+
+
+```{r, echo=FALSE}
+plot_LASSO_coefficients +
+  coord_cartesian(xlim=c(.03, 0.3), ylim=c(-0.015, 0.015)) +
+  labs(title = "LASSO Coefficients (red line = lambda star, blue line = lambda star with 1 SE)") +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+library(Metrics)
+# Training Score (Root Mean Squared Logarthmic Error)
+y_hat <- predict(LASSO_fit, newx=predictor_matrix_train, s=lambda_star_1SE) %>% 
+  as.vector()
+rmsle(actual = train$price_doc, predicted = exp(y_hat))
+
+# Kaggle Submission
+y_hat <- predict(LASSO_fit, newx=predictor_matrix_test, s=lambda_star_1SE) %>% 
+  as.vector()
+#hist(y_hat)
+sample_submission$price_doc <- exp(y_hat)
+write.csv(sample_submission, "submission.csv", row.names=FALSE)
 ```
 
 
+
+
+### Linear Model (lm)
+
+```{r}
+# Training Score Calculation
+model_lm_price_doc <- lm(model_formula, data = train)
+y_hat <- predict(model_lm_price_doc, newdata= train)
+rmsle(actual = train$price_doc, predicted = exp(y_hat))
+
+# Kaggle Score Calculation
+y_hat <- predict(model_lm_price_doc, newdata = test)
+sample_submission$price_doc <- exp(y_hat)
+write.csv(sample_submission, "submission_lm.csv", row.names=FALSE)
+
+```
 
 
 
@@ -72,5 +165,5 @@ in these cells:
 
 Method                | Training Score  | Kaggle Score
 --------------------- | -------------   | -------------
-lm                    |                 |  
-LASSO crossvalidated  |                 |  
+lm                    | 0.2535                |  2.1700
+LASSO crossvalidated  | 0.5701                |  0.4391
